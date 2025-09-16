@@ -1,0 +1,9 @@
+freechat/
+
+# 문서 파일 무시
+*.ppt
+*.pptx
+*.doc
+*.docx
+*.hwp
+*.pdf
