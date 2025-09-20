@@ -87,12 +87,27 @@ def run_stt(audio, fs):
     return result.get("text", "").strip()
 
 # -------------------------------
+# 이전 대화 요약
+# -------------------------------
+if "conversation" not in st.session_state:
+    st.session_state.conversation = []
+if "conversation_summary" not in st.session_state:
+    st.session_state.conversation_summary = ""
+
+MAX_CONTEXT = 10
+
+# -------------------------------
 # LLM 답변 생성
 # -------------------------------
 def generate_ai_response(user_input):
-    conversation_text = ""
-    for turn in st.session_state.conversation[-5:]:
-        conversation_text += f"Student: {turn['user']}\nTutor: {turn['ai']}\n"
+    recent_convos = st.session_state.conversation[-MAX_CONTEXT:]
+
+    context_text = ""
+    if st.session_state.conversation_summary:
+        context_text += f"[Summary of previous conversation]\n{st.session_state.conversation_summary}\n\n"
+
+    for turn in recent_convos:
+        context_text += f"Student: {turn['user']}\nTutor: {turn.get('ai','')}\n"
 
     prompt = f"""
 You are a friendly English conversation tutor.
@@ -106,7 +121,7 @@ Conversation Rules:
 3.  **Paraphrase, Don't Repeat:** You MUST NEVER repeat the student's sentences or key phrases.
 4.  **Stay in Your Role:** You are the 'Tutor'. You MUST NOT write the "Student:" part of the conversation.
 5.  Respond naturally according to the student's level.
-
+6.  End sentences properly: All sentences must end with proper punctuation (., !, ?).
 
 The student has provided the following topic: "{user_input}".
 
@@ -130,10 +145,19 @@ Tutor: "That sounds like a fun way to relax! It's great to take a break sometime
 Student: "I like listening to music."
 Tutor: "That's a great hobby. Music can be very relaxing."
 **(This is bad because it doesn't ask a question and ends the conversation.)**
+
+**(O) Good Example - Ends properly and asks a question:**
+Student: "I enjoyed watching a movie yesterday."
+Tutor: "That sounds like a fun way to relax! It's great to take a break sometimes. What kind of film was it?"
+
+**(X) Bad Example - Does not end properly:**
+Student: "I like listening to music."
+Tutor: "That's a great hobby. Music can be very relaxing"
+
 ---
 
-Conversation so far:
-{conversation_text}
+Context so far:
+{context_text}
 
 Tutor:"""
     
@@ -150,6 +174,12 @@ Tutor:"""
     # Tutor: 뒤에 오는 부분만 추출
     if "Tutor:" in reply:
         reply = reply.split("Tutor:")[-1].strip()
+
+    if (len(st.session_state.conversation) + 1) % MAX_CONTEXT == 0:
+        summary_prompt = f"Summarize the following conversation briefly:\n{context_text}"
+        summary_inputs = tokenizer(summary_prompt, return_tensors="pt").to(DEVICE)
+        summary_outputs = model.generate(**summary_inputs, max_new_tokens=100)
+        st.session_state.conversation_summary = tokenizer.decode(summary_outputs[0], skip_special_tokens=True)
 
     return reply
 
