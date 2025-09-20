@@ -7,6 +7,7 @@ import sounddevice as sd
 import numpy as np
 import tempfile
 import soundfile as sf
+import time
 
 # -------------------------------
 # 모델 & TTS 로드
@@ -40,13 +41,38 @@ if "conversation" not in st.session_state:
 # -------------------------------
 # 녹음 함수
 # -------------------------------
-def record_audio(duration=5, fs=16000):
-    """duration 초 동안 녹음하고 반환"""
+def record_audio_fixed(duration=5, fs=16000):
+    """duration 초 동안 녹음하고 반환 (고정 길이)"""
     st.info(f"🔴 Listening for {duration} seconds...")
     audio = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
     sd.wait()
     st.success("✅ Finished!")
-    return audio.flatten(), fs
+    return (audio.flatten().astype(np.float32)/32768.0), fs
+
+def record_audio_vad(silence_sec=2.0, fs=16000, silence_thresh=0.01, max_total_sec=15):
+    """무음이 silence_sec 이상 지속되면 자동 종료. 안전상 max_total_sec 넘어가면 강제 종료."""
+    st.info(f"🔴 Listening... 무음 {silence_sec}초 지속 시 자동 종료 (최대 {max_total_sec}초)")
+    frames = []
+    block_dur = 0.05
+    block_size = int(fs*block_dur)
+    silent_run = 0.0
+    start = time.time()
+
+    with sd.InputStream(samplerate=fs, channels=1, dtype="float32") as stream:
+        while True:
+            block, _ = stream.read(block_size)
+            x = block[:, 0]
+            frames.append(x.copy())
+            rms = float(np.sqrt(np.mean(x**2) + 1e-12))
+            silent_run = (silent_run + block_dur) if rms < silence_thresh else 0.0
+            if silent_run >= silence_sec:
+                break
+            if time.time() - start >= max_total_sec:
+                break
+
+    audio = np.concatenate(frames).astype(np.float32) if frames else np.zeros(0, dtype=np.float32)
+    st.success("✅ Finished!")
+    return audio, fs
 
 # -------------------------------
 # STT
@@ -146,36 +172,51 @@ level = st.selectbox("수준을 선택하세요", ["초급", "중급", "고급"]
 # 수준별 문장 수 설정
 sentence_count = {"초급": 2, "중급": 4, "고급": 6}[level]
 
-# 녹음 버튼
-duration = st.slider("발화 길이 (초)", 5, 15, 5)
+# -------------------------------
+# 녹음 종료 방식 선택
+# -------------------------------
+mode = st.radio("발화 종료 방식", ("무음 자동 종료", "고정 길이 제한"), horizontal=True)
+
+if mode == "무음 자동 종료":
+    silence_sec = st.slider("무음 지속 시간(초)", 1.0, 5.0, 2.0, 0.5, format="%.1f")
+    with st.expander("고급 설정 보기"):
+        silence_thresh = st.slider("무음 임계(RMS x100, 낮을수록 민감)", 0.2, 3.0, 1.0, 0.4, format="%.1f")/100
+        safety_cap = st.slider("최대 발화 시간(초)", 5, 30, 15)
+    st.caption(f"💡 연속 무음이 {silence_sec}초 이상이면 자동 종료됩니다. (최대 발화 시간 {safety_cap}초)")
+else:
+    duration = st.slider("발화 길이 제한 (초)", 3, 15, 5)
+    st.caption(f"💡 총 발화 시간 {duration}초가 지나면 자동으로 종료됩니다.")
+
+st.divider()
+
+# -------------------------------
+# 녹음 + STT + LLM + TTS 트리거
+# -------------------------------
 if st.button("My turn"):
-    audio, fs = record_audio(duration, fs=16000)
-    # --- 1. 음성인식 중 스피너 표시 ---
-    with st.spinner(""):
+    if mode == "무음 자동 종료":
+        audio, fs = record_audio_vad(
+            silence_sec=silence_sec,
+            fs=16000,
+            silence_thresh=silence_thresh,
+            max_total_sec=safety_cap
+        )
+    else:
+        audio, fs = record_audio_fixed(duration, fs=16000)
+
+    with st.spinner("📝 인식 중..."):
         user_text = run_stt(audio, fs)
     
     if user_text:
         st.markdown(f"**You:** {user_text}")
-
-        # --- 2. AI 답변 생성 중 스피너 표시 (요청하신 부분) ---
-        with st.spinner(""):
+        with st.spinner("🤖 답변 생성 중..."):
             ai_reply = generate_ai_response(user_text)
             st.session_state.conversation.append({"user": user_text, "ai": ai_reply})
-        
         st.markdown(f"**AI Tutor:** {ai_reply}")
-
-        # --- 3. TTS 음성 생성 중 스피너 표시 ---
-        with st.spinner(""):
+        with st.spinner("🗣️ 발화 재생 중..."):
             speak(ai_reply)
     else:
         st.warning("Could not recognize any speech. Please try again.")
-    user_text = run_stt(audio, fs)
-    st.markdown(f"**You:** {user_text}")
 
-    ai_reply = generate_ai_response(user_text)
-    st.session_state.conversation.append({"user": user_text, "ai": ai_reply})
-    st.markdown(f"**AI Tutor:** {ai_reply}")
-    speak(ai_reply)
 
 # 대화 로그
 st.markdown("## 💬 대화 내용")
