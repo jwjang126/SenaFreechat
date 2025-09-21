@@ -7,3 +7,7 @@ freechat/
 *.docx
 *.hwp
 *.pdf
+
+node_modules/
+.env
+build/
