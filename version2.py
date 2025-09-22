@@ -9,6 +9,7 @@ import tempfile
 import soundfile as sf
 import time
 from io import StringIO
+import datetime
 
 # -------------------------------
 # 모델 & TTS 로드
@@ -251,7 +252,7 @@ if st.button("My turn"):
 
 
 # -------------------------------
-# 📄 전체 대화 보기 / 다운로드(.txt/.csv)
+# 📄 전체 대화 보기 / 다운로드(.txt)
 # -------------------------------
 def get_full_transcript_txt():
     """텍스트 형식으로 전체 대화 반환"""
@@ -262,26 +263,16 @@ def get_full_transcript_txt():
         lines.append("-"*40)
     return "\n".join(lines[:-1]) if lines else "(no conversation yet)"
 
-def get_full_transcript_md():
-    lines = []
-    for turn in st.session_state.conversation:
-        if turn.get("user"): lines.append(f"**You:** {turn['user']}")
-        if turn.get("ai"):   lines.append(f"**AI Tutor:** {turn['ai']}")
-        lines.append("---")
-    return "\n\n".join(lines[:-1]) if lines else "_(no conversation yet)_"
-
 # -------------------------------
 # Streamlit UI
 # -------------------------------
-st.markdown("## 📄 전체 대화 보기 / 다운로드")
+#st.markdown("##### 📄 전체 대화 보기 / 다운로드")
 
-with st.expander("전체 대화 펼치기"):
+today_str = datetime.datetime.now().strftime("%y%m%d")
+safe_topic = topic.replace(" ", "_") if topic else "NoTopic"
+file_name = f"{today_str}_{safe_topic}_{level}.txt"
+
+with st.expander("📄 전체 대화 보기 / 다운로드"):
     st.text_area("전체 대화 내용", value=get_full_transcript_txt(), height=300)
-
-c1, c2 = st.columns(2)
-with c1:
     st.download_button("⬇️ Save .txt", data=get_full_transcript_txt(),
-                       file_name="conversation.txt", mime="text/plain")
-with c2:
-    st.download_button("⬇️ Save .md", data=get_full_transcript_md(),
-                       file_name="conversation.md", mime="text/markdown")
+                       file_name=file_name, mime="text/plain")
