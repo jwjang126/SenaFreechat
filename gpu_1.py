@@ -13,7 +13,7 @@ from io import StringIO
 # -------------------------------
 # 모델 & TTS 로드
 # -------------------------------
-MODEL_NAME = "meta-llama/Llama-3.2-1B"
+MODEL_NAME = "google/gemma-3-4b-it"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 @st.cache_resource(show_spinner=True)
