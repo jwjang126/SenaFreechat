@@ -24,14 +24,21 @@ def load_model():
 
 tokenizer, model = load_model()
 
-@st.cache_resource
-def load_tts():
-    tts = TTS(model_name="tts_models/en/ljspeech/tacotron2-DDC",
-              progress_bar=False,
-              gpu=torch.cuda.is_available())
+# TTS 로드
+@st.cache_resource(show_spinner=True)
+def load_tts(force_reload=False):
+    # 캐시 강제 초기화
+    if force_reload:
+        st.cache_data.clear()  # streamlit cache 강제 초기화
+    tts = TTS(
+        model_name="tts_models/en/ljspeech/tacotron2-DDC",
+        progress_bar=False,
+        gpu=torch.cuda.is_available()
+    )
     return tts
 
-tts = load_tts()
+# 호출 시
+tts = load_tts(force_reload=True)
 
 # -------------------------------
 # 세션 상태 초기화
@@ -91,20 +98,19 @@ def run_stt(audio, fs):
 # -------------------------------
 def generate_ai_response(user_input):
     recent_convos = st.session_state.conversation[-MAX_CONTEXT:]
+
     context_text = ""
     if st.session_state.conversation_summary:
         context_text += f"[Summary of previous conversation]\n{st.session_state.conversation_summary}\n\n"
+
     for turn in recent_convos:
         context_text += f"Student: {turn['user']}\nTutor: {turn.get('ai','')}\n"
 
     prompt = f"""
-You are a friendly English conversation tutor and partner.
+You are a friendly English conversation tutor.
 Your Persona:
-- You are a supportive and patient tutor who talks with the student like a conversation partner.
+- You are friendly, encouraging, and patient.
 - Your goal is to make the student feel comfortable and encourage them to speak more.
-- You only respond to the student’s messages.
-- Keep your responses concise and to the point, while still encouraging conversation.
-
 
 Conversation Rules:
 1.  **Be expressive:** Your response should be around 3-4 complete sentences.
@@ -124,15 +130,13 @@ Level guidance:
     - 고급: Think the student wants to speak like a native speaker. Use advanced vocabulary and natural expressions.
 - Expected response length: around {sentence_count} sentences.
 
-Remember: Your job is not to lecture but to **actively join the conversation** and help the student speak more.
 
 ---
 **Examples of what to do and what NOT to do:**
 
 **(O) Good Example - Asks a question:**
 Me: "I enjoyed watching a movie yesterday."
-You: "Wow, that sounds like so much fun! What genre of movie did you watch?
-What part did you enjoy the most? Did any scene really surprise or make you laugh?"
+You: "That sounds like a fun way to relax! It's great to take a break sometimes. What kind of film was it?"
 
 **(X) Bad Example - Does NOT ask a question:**
 Me: "I like listening to music."
@@ -150,37 +154,33 @@ You: "That's a great hobby. Music can be very relaxing"
 Send only the answer of "You" in print.
 ---
 
-Tutor:
-"""
+Context so far:
+{context_text}
 
-    # 안전한 토크나이저 설정
-    tokenizer.pad_token = tokenizer.eos_token
-
-    # 입력 토큰화 (길이 제한)
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to(DEVICE)
-
-    # 답변 생성
+Tutor:"""
+    
+    inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
     outputs = model.generate(
         **inputs,
         max_new_tokens=80,
         temperature=0.7,
+        pad_token_id=tokenizer.eos_token_id,
         do_sample=True,
-        pad_token_id=tokenizer.pad_token_id,
-        eos_token_id=tokenizer.eos_token_id
     )
-
     reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    # Tutor: 뒤에 오는 부분만 추출
     if "Tutor:" in reply:
         reply = reply.split("Tutor:")[-1].strip()
 
-    # 요약 갱신 (선택)
     if (len(st.session_state.conversation) + 1) % MAX_CONTEXT == 0:
         summary_prompt = f"Summarize the following conversation briefly:\n{context_text}"
-        summary_inputs = tokenizer(summary_prompt, return_tensors="pt", truncation=True, max_length=512).to(DEVICE)
+        summary_inputs = tokenizer(summary_prompt, return_tensors="pt").to(DEVICE)
         summary_outputs = model.generate(**summary_inputs, max_new_tokens=100)
         st.session_state.conversation_summary = tokenizer.decode(summary_outputs[0], skip_special_tokens=True)
 
     return reply
+
 
 
 # -------------------------------
@@ -191,50 +191,10 @@ def generate_feedback_for_turn(user_text):
 You are an English tutor. Write a Feedback Report for the student's input: "{user_text}".
 Focus only on what needs improvement. Do NOT mention what was done well.
 Do NOT continue the conversation or ask questions. Output text only. Avoid just giving the corrected sentence without explanation.
-
 Instructions:
-
-1. Grammar errors: list mistakes, corrections, and explanations.
-2. Awkward or unnatural expressions: suggest better alternatives and explain why.
-3. Over-translation or excessive literal translation: note if found and explain.
-4. Vocabulary suggestions: for advanced students, recommend better words/phrases to sound more native-like.
-5. Score: give a score out of 10 (10 = native-like, 1 = very poor). Focus on grammar, clarity, naturalness, and vocabulary.
-6. Summary: 2–3 sentences highlighting improvements needed. For 초급, prioritize must-fix errors. For 중급, include moderate corrections. For 고급, prioritize advanced vocabulary and natural phrasing.
-
-Level guidance:
-- 초급: Focus on essential corrections, prioritize grammar and clarity.
-- 중급: Include grammar and stylistic improvements, suggest better words/phrases moderately.
-- 고급: Be thorough and detailed, suggest advanced vocabulary, idioms, and natural expressions.
-
-Examples (TODO / NOT TODO):
-
-**(O) Good Example - Correct usage (ignore in report)**:
-Me: "I went to the park yesterday."
-
-(O) Good Example – Recommend a better response with an appropriate explanation of the grammatical errors:
-Student: "I go to park yesterday."
-Tutor: "I went to the park yesterday." Since you are talking about something that happened in the past (yesterday), the verb should be in the past tense. 'go' becomes 'went'. Also, 'park' needs the article 'the' to be grammatically correct.
-
-(X) Bad Example – Simply provide the answer:
-Student: "I go to park yesterday."
-Tutor: "I went to the park yesterday."
-
-(O) Good Example – Suggest a better sentence with an appropriate explanation for the unnatural phrasing:
-Student: "I like read book."
-Tutor: "I like reading books." After 'like', we usually use the gerund form of the verb, so 'read' becomes 'reading'. Also, when talking about books in general, use the plural 'books' to make it sound natural.
-
-(O) Good Example – Combine grammar + unnatural phrasing corrections:
-Student: "She no go to school today."
-Tutor: "She didn’t go to school today." The verb 'go' must be in the past tense because it refers to today’s absence. Also, use 'didn’t' for negative past tense sentences.
-
-(X) Bad Example – Only give a corrected sentence without explanation:
-Student: "She no go to school today."
-Tutor: "She didn’t go to school today."
-
-
-##Send only the answer of "Tutor" in print.
----------------------------------
-Report format:
+- Focus ONLY on mistakes and suggestions for improvement.
+- Output PLAIN TEXT only, NO CODE, NO QUOTES, NO JSON.
+- Use the following format:
 
 Grammar errors:
 - mistake → correction + explanation
@@ -253,19 +213,38 @@ Score: X/10
 Summary:
 - ...
 
+Do NOT continue the conversation or ask questions.
 """
     report_inputs = tokenizer(report_prompt, return_tensors="pt").to(DEVICE)
-    report_outputs = model.generate(**report_inputs, max_new_tokens=200, temperature=0.3, pad_token_id=tokenizer.eos_token_id)
+    report_outputs = model.generate(
+        **report_inputs,
+        max_new_tokens=300,
+        temperature=0.3,
+        pad_token_id=tokenizer.eos_token_id
+    )
     report = tokenizer.decode(report_outputs[0], skip_special_tokens=True)
-    return report
-
+    return report.strip()
 # -------------------------------
 # TTS
 # -------------------------------
+
 def speak(text):
-    wav = tts.tts(text=text)
-    sd.play(wav, samplerate=tts.synthesizer.output_sample_rate)
-    sd.wait()
+    # 빈 문자열 방지
+    if not text.strip():
+        st.warning("⚠️ 발화할 내용이 없습니다.")
+        return
+
+    # Tacotron2 최소 길이 방어
+    min_len = 10  # 최소 토큰 길이
+    if len(text) < min_len:
+        text = text + " " * (min_len - len(text))  # 공백으로 길이 확보
+
+    try:
+        wav = tts.tts(text=text)
+        sd.play(wav, samplerate=tts.synthesizer.output_sample_rate)
+        sd.wait()
+    except RuntimeError as e:
+        st.error(f"⚠️ TTS 오류 발생: {e}")
 
 # -------------------------------
 # Streamlit UI
