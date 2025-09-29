@@ -1,19 +1,23 @@
-import React, { useEffect, useState } from "react";
-import './App.css';
+// App.js
+import { useState } from "react";
+import Chat from "./pages/freechat"; // 컴포넌트는 대문자로 시작
+import Home from "./pages/home"; 
 
 function App() {
-  const [msg, setMsg] = useState("");
-
-  useEffect(() => {
-    fetch("/api/hello") // proxy 설정 후
-      .then(res => res.json())
-      .then(data => setMsg(data.message))
-      .catch(err => setMsg("Error fetching data"));
-  }, []);
+  const [page, setPage] = useState("home");
 
   return (
-    <div className="App">
-      <h1>{msg}</h1>
+    <div>
+      <header style={{ background: "#333", color: "#fff", padding: "1rem" }}>
+        <button onClick={() => setPage("home")}>Home</button>
+        <button onClick={() => setPage("chat")}>Freechat</button>
+        {/* <button onClick={() => setPage("about")}>소개</button> */}
+      </header>
+
+      <main style={{ padding: "2rem" }}>
+        {page === "home" && <Home />}
+        {page === "chat" && <Chat />}
+      </main>
     </div>
   );
 }
