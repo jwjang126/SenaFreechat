@@ -6,6 +6,8 @@ const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const ffmpeg = require("fluent-ffmpeg");
+const axios = require("axios");
+const FormData = require("form-data");
 
 const app = express();
 app.use(cors());
@@ -15,63 +17,52 @@ app.use(express.urlencoded({ extended: true }));
 
 const upload = multer({ dest: "uploads/" });
 
-app.post("/process-audio", upload.single("audio"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+app.post("/process-audio", upload.single("audio"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
 
-  const conversationHistory = req.body.conversationHistory || "[]";
-  const audioPath = req.file.path;
-  const pcmPath = audioPath + "_16k.wav";
-  const mp3Path = path.join(__dirname, "uploads", path.basename(audioPath, ".webm") + ".mp3");
+  try {
+    // 1. Python API 서버로 보낼 새로운 FormData 생성
+    const formData = new FormData();
+    formData.append("audio", fs.createReadStream(req.file.path), { filename: 'record.webm' });
+    formData.append("conversationHistory", req.body.conversationHistory || "[]");
+    formData.append("topic", req.body.topic || "any interesting topic");
+    formData.append("level", req.body.level || "beginner");
 
-  ffmpeg(audioPath)
-    .outputOptions(["-ac 1", "-ar 16000", "-f wav"])
-    .output(pcmPath)
-    .on("end", () => {
-      const py = spawn("python", [
-        path.join(__dirname, "process_audio.py"),
-        pcmPath,
-        mp3Path,
-        conversationHistory,
-      ]);
+    // 2. Python FastAPI 서버에 POST 요청
+    const pythonApiUrl = "http://localhost:8000/process-audio/";
+    const response = await axios.post(pythonApiUrl, formData, {
+      headers: formData.getHeaders(),
+    });
 
-      let result = "";
-      py.stdout.on("data", (chunk) => { result += chunk.toString(); });
-      py.stderr.on("data", (c) => { console.error("Python stderr:", c.toString()); });
-      py.on("close", (code) => {
-        console.log("Python exited with code:", code);
-        try {
-          const lines = result.trim().split('\n');
-          const lastLine = lines[lines.length - 1];
-          const jsonResult = JSON.parse(lastLine);
+    const data = response.data;
+    if (data.error) {
+        throw new Error(data.error);
+    }
 
-          if (!fs.existsSync(mp3Path)) {
-            return res.status(500).json({ error: "MP3 not produced" });
-          }
+    // 3. Base64로 인코딩된 오디오 데이터를 다시 mp3 파일로 저장
+    const audioBuffer = Buffer.from(data.audio_base64, 'base64');
+    const mp3FileName = req.file.filename + ".mp3";
+    const mp3Path = path.join(__dirname, "uploads", mp3FileName);
+    fs.writeFileSync(mp3Path, audioBuffer);
+    
+    // 4. React 클라이언트에 최종 결과 전송
+    res.json({
+      user_text: data.user_text,
+      ai_reply: data.ai_reply,
+      audio_file: "media/" + mp3FileName, // React가 접근할 수 있는 경로
+    });
 
-          // [수정] 프론트엔드로 user_text와 ai_reply를 모두 전달
-          res.json({
-            user_text: jsonResult.user_text,
-            ai_reply: jsonResult.ai_reply,
-            audio_file: "media/" + path.basename(mp3Path)
-          });
-          
-          try { fs.unlinkSync(audioPath); } catch(e){}
-          try { fs.unlinkSync(pcmPath); } catch(e){}
-
-        } catch (err) {
-          console.error("Failed to parse JSON:", err);
-          res.status(500).json({ error: "Python output parse error", raw: result });
-        }
-      });
-    })
-    .on("error", (err) => {
-      console.error("FFmpeg error:", err);
-      res.status(500).json({ error: "Audio conversion failed" });
-    })
-    .run();
+  } catch (error) {
+    console.error("Error proxying to Python API:", error.message);
+    res.status(500).json({ error: "Failed to process audio via Python API" });
+  } finally {
+    // 5. multer가 생성한 임시 webm 파일 삭제
+    fs.unlinkSync(req.file.path);
+  }
 });
-
-// 파일 삭제 API (이전과 동일)
+// 파일 삭제 API
 app.post("/delete-audio", (req, res) => {
   const filename = req.body.filename;
   if (!filename || filename.includes("..")) {
@@ -89,6 +80,5 @@ app.post("/delete-audio", (req, res) => {
     res.json({ message: "File not found" });
   }
 });
-
 
 app.listen(5000, () => console.log("Server running on port 5000"));
